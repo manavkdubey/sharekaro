@@ -9,6 +9,7 @@ use egui::{
     RichText, Rounding, ScrollArea, Sense, TopBottomPanel, Vec2,
 };
 use rfd::FileDialog;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::{
@@ -27,6 +28,7 @@ pub struct ChromeTabApp {
     listen_addr: String,
     listening: bool,
     rt_handle: Handle,
+    remote_to_local: Arc<Mutex<HashMap<String, String>>>,
 }
 
 // impl Default for ChromeTabApp {
@@ -85,6 +87,7 @@ impl ChromeTabApp {
             listening,
             listen_addr,
             rt_handle,
+            remote_to_local: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -138,6 +141,7 @@ impl App for ChromeTabApp {
                     .clicked()
                 {
                     if let Ok(addr) = self.listen_addr.parse::<SocketAddr>() {
+                        let remote = self.remote_to_local.clone();
                         // spawn a _new_ OS thread and build a runtime there
                         thread::spawn(move || {
                             let rt = tokio::runtime::Builder::new_current_thread()
@@ -145,7 +149,7 @@ impl App for ChromeTabApp {
                                 .build()
                                 .expect("failed to build runtime");
                             rt.block_on(async move {
-                                crate::network::connect_client(addr).await;
+                                crate::network::connect_client(addr, remote).await;
                             });
                         });
                         self.listening = true;

@@ -284,7 +284,7 @@ fn normalize_url(raw: &str) -> String {
 pub fn import_and_open_with_cookies_from_memory(
     cookies: &[Cookie],
     url: &str,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<String, Box<dyn Error>> {
     let to_open = if url.starts_with("http://") || url.starts_with("https://") {
         url.to_string()
     } else {
@@ -298,6 +298,11 @@ pub fn import_and_open_with_cookies_from_memory(
     let body = resp.text()?;
     println!("CDP response body: {}", body);
     let new_tab: serde_json::Value = serde_json::from_str(&body)?;
+    let local_tab_id = new_tab["id"]
+        .as_str()
+        .ok_or("missing new tab ID")?
+        .to_string();
+
     let ws_url = new_tab["webSocketDebuggerUrl"]
         .as_str()
         .ok_or("missing webSocketDebuggerUrl")?;
@@ -346,7 +351,7 @@ pub fn import_and_open_with_cookies_from_memory(
     socket.write_message(Message::Text(nav.to_string().into()))?;
 
     println!("import_and_open_with_cookies_from_memory complete");
-    Ok(())
+    Ok(local_tab_id)
 }
 
 /// Revoke (delete) cookies in a live tab, based on name/domain/path.

@@ -3,7 +3,8 @@
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::net::SocketAddr;
+use std::sync::Mutex;
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 use tokio::{net::TcpListener, sync::broadcast};
 use tokio_tungstenite::{accept_async, connect_async, tungstenite::Message};
 
@@ -104,7 +105,10 @@ pub async fn spawn_server(
     (grant_tx, revoke_tx)
 }
 
-pub async fn connect_client(addr: SocketAddr) {
+pub async fn connect_client(
+    addr: SocketAddr,
+    remote_to_local: Arc<Mutex<HashMap<String, String>>>,
+) {
     let url = format!("ws://{}", addr);
     println!("▶️ Client dialing {}", url);
     let (mut ws, _) = match connect_async(&url).await {
@@ -137,17 +141,17 @@ pub async fn connect_client(addr: SocketAddr) {
                 }
             };
 
-            // offload the entire blocking import call to a blocking thread
+            let remote_id = grant.tab_id.clone();
             let cookies = grant.cookies.clone();
             let url = grant.url.clone();
+            let map = remote_to_local.clone();
             tokio::task::spawn_blocking(move || {
                 println!("🔄 spawn_blocking: import_and_open_with_cookies_from_memory");
-                if let Err(e) =
+                if let Ok(local_id) =
                     crate::chrome::import_and_open_with_cookies_from_memory(&cookies, &url)
                 {
-                    println!("❌ import error: {}", e);
-                } else {
-                    println!("✅ import_and_open_with_cookies_from_memory succeeded");
+                    let mut guard = map.lock().unwrap();
+                    guard.insert(remote_id.clone(), local_id.clone());
                 }
             });
         }
@@ -161,9 +165,14 @@ pub async fn connect_client(addr: SocketAddr) {
                     continue;
                 }
             };
+            let remote_id = revoke.tab_id.clone();
+            let local_id = remote_to_local
+                .lock()
+                .unwrap()
+                .get(&remote_id)
+                .cloned()
+                .unwrap_or(remote_id.clone());
 
-            // clone out just what we need so the closure owns it all
-            let tab_id = revoke.tab_id.clone();
             let cookies = revoke.cookies.clone();
 
             tokio::task::spawn_blocking(move || {
@@ -174,7 +183,7 @@ pub async fn connect_client(addr: SocketAddr) {
                     .map(|c| (c.name.as_str(), c.domain.as_str(), c.path.as_str()))
                     .collect();
 
-                match crate::chrome::revoke_cookies(&tab_id, &tuples) {
+                match crate::chrome::revoke_cookies(&local_id, &tuples) {
                     Ok(_) => println!("✅ revoke_cookies succeeded"),
                     Err(e) => println!("❌ revoke error: {}", e),
                 }
