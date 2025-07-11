@@ -5,8 +5,8 @@ use crate::chrome::{
 use crate::network::{GrantMessage, RevokeCookie, RevokeMessage};
 use eframe::{App, CreationContext};
 use egui::{
-    self, Align, CentralPanel, Color32, Direction, FontId, Frame, Label, Layout, Margin, RichText,
-    Rounding, ScrollArea, Sense, TopBottomPanel, Vec2,
+    self, Align, Button, CentralPanel, Color32, Direction, FontId, Frame, Label, Layout, Margin,
+    RichText, Rounding, ScrollArea, Sense, TopBottomPanel, Vec2,
 };
 use rfd::FileDialog;
 use std::net::SocketAddr;
@@ -16,6 +16,7 @@ use std::{
     thread,
     time::Duration,
 };
+use tokio::runtime::Handle;
 use tokio::sync::broadcast::Sender as BroadcastSender;
 
 pub struct ChromeTabApp {
@@ -25,6 +26,7 @@ pub struct ChromeTabApp {
     revoke_tx: BroadcastSender<RevokeMessage>,
     listen_addr: String,
     listening: bool,
+    rt_handle: Handle,
 }
 
 // impl Default for ChromeTabApp {
@@ -58,6 +60,7 @@ impl ChromeTabApp {
         cc: &CreationContext<'_>,
         grant_tx: BroadcastSender<GrantMessage>,
         revoke_tx: BroadcastSender<RevokeMessage>,
+        rt_handle: Handle,
     ) -> Self {
         let tabs = Arc::new(Mutex::new(Vec::new()));
         let tabs_clone = tabs.clone();
@@ -81,6 +84,7 @@ impl ChromeTabApp {
             revoke_tx,
             listening,
             listen_addr,
+            rt_handle,
         }
     }
 }
@@ -130,21 +134,16 @@ impl App for ChromeTabApp {
                     "Listen"
                 };
                 if ui
-                    .add_enabled(!self.listening, egui::Button::new("Listen"))
+                    .add_enabled(!self.listening, Button::new(button_label))
                     .clicked()
                 {
-                    let addr = match self.listen_addr.parse::<SocketAddr>() {
-                        Ok(a) => a,
-                        Err(_) => return,
-                    };
-                    std::thread::spawn(move || {
-                        let rt = tokio::runtime::Builder::new_current_thread()
-                            .enable_all()
-                            .build()
-                            .unwrap();
-                        rt.block_on(crate::network::connect_client(addr));
-                    });
-                    self.listening = true;
+                    if let Ok(addr) = self.listen_addr.parse::<SocketAddr>() {
+                        let handle = self.rt_handle.clone();
+                        handle.spawn(async move {
+                            crate::network::connect_client(addr).await;
+                        });
+                        self.listening = true;
+                    }
                 }
             });
             ui.separator();

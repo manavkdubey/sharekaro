@@ -7,6 +7,8 @@ use egui::Vec2;
 use egui::ViewportBuilder;
 use sharekaro::chrome::{launch_chrome_with_cdp, listen_tabs_ws};
 use sharekaro::gui::ChromeTabApp;
+use sharekaro::network::spawn_server;
+use tokio::runtime::{Handle, Runtime};
 
 /// Your CLI args
 #[derive(Parser)]
@@ -17,23 +19,25 @@ struct Args {
 }
 fn main() -> Result<(), eframe::Error> {
     let args = Args::parse();
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    // start Chrome + CDP
-    let (_child, _temp_profile) = launch_chrome_with_cdp(args.profile);
-    // spawn your network server
-    let (grant_tx, revoke_tx) = rt.block_on(sharekaro::network::spawn_server(
-        "0.0.0.0:9234".parse().unwrap(),
-    ));
+    let rt = Runtime::new().expect("Failed to create Tokio runtime");
+    let handle: Handle = rt.handle().clone();
+
+    // launch Chrome with CDP
+    let (_child, _temp_profile) = launch_chrome_with_cdp(args.profile.clone());
+
+    // start the shared‐server once
+    let (grant_tx, revoke_tx) = rt.block_on(spawn_server("0.0.0.0:9234".parse().unwrap()));
+
     let app_factory =
         move |cc: &CreationContext<'_>| -> Result<Box<dyn App>, Box<dyn Error + Send + Sync>> {
             Ok(Box::new(ChromeTabApp::new(
                 cc,
                 grant_tx.clone(),
                 revoke_tx.clone(),
+                handle.clone(),
             )))
         };
 
-    // 4) Call run_native and propagate its boxed error
     run_native("ShareKaro", NativeOptions::default(), Box::new(app_factory))?;
     Ok(())
 }
