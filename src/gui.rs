@@ -24,8 +24,38 @@ pub struct ChromeTabApp {
     revoke_tx: BroadcastSender<RevokeMessage>,
 }
 
-impl Default for ChromeTabApp {
-    fn default() -> Self {
+// impl Default for ChromeTabApp {
+//     fn default() -> Self {
+//         let tabs = Arc::new(Mutex::new(Vec::new()));
+//         let tabs_clone = tabs.clone();
+//         thread::spawn(move || {
+//             loop {
+//                 if let Ok(new_tabs) = fetch_tabs() {
+//                     *tabs_clone.lock().unwrap() = new_tabs;
+//                 }
+//                 thread::sleep(Duration::from_secs(1));
+//             }
+//         });
+//         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+//         let (grant_tx, revoke_tx) = rt.block_on(crate::network::spawn_server(
+//             "0.0.0.0:9234".parse().unwrap(),
+//         ));
+
+//         Self {
+//             tabs,
+//             cookie_import: CookieImportState::default(),
+//             grant_tx,
+//             revoke_tx,
+//         }
+//     }
+// }
+
+impl ChromeTabApp {
+    pub fn new(
+        cc: &CreationContext<'_>,
+        grant_tx: BroadcastSender<GrantMessage>,
+        revoke_tx: BroadcastSender<RevokeMessage>,
+    ) -> Self {
         let tabs = Arc::new(Mutex::new(Vec::new()));
         let tabs_clone = tabs.clone();
         thread::spawn(move || {
@@ -36,31 +66,11 @@ impl Default for ChromeTabApp {
                 thread::sleep(Duration::from_secs(1));
             }
         });
-        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-        let (grant_tx, revoke_tx) = rt.block_on(crate::network::spawn_server(
-            "0.0.0.0:9234".parse().unwrap(),
-        ));
-
-        Self {
-            tabs,
-            cookie_import: CookieImportState::default(),
-            grant_tx,
-            revoke_tx,
-        }
-    }
-}
-
-impl ChromeTabApp {
-    pub fn new(
-        cc: &CreationContext<'_>,
-        grant_tx: BroadcastSender<GrantMessage>,
-        revoke_tx: BroadcastSender<RevokeMessage>,
-    ) -> Self {
         let mut style = (*cc.egui_ctx.style()).clone();
         style.visuals.dark_mode = true;
         cc.egui_ctx.set_style(style);
         Self {
-            tabs: Self::default().tabs,
+            tabs,
             cookie_import: CookieImportState::default(),
             grant_tx,
             revoke_tx,
