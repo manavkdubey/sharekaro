@@ -1,5 +1,3 @@
-// src/network.rs
-
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -37,66 +35,63 @@ pub async fn spawn_server(
     let (grant_tx, _) = broadcast::channel(16);
     let (revoke_tx, _) = broadcast::channel(16);
 
-    let listener = match TcpListener::bind(addr).await {
-        Ok(l) => {
-            println!("✅ Server bound to {}", addr);
-            l
-        }
-        Err(e) => panic!("⚠️ Failed to bind server to {}: {}", addr, e),
-    };
+    let listener = TcpListener::bind(addr)
+        .await
+        .unwrap_or_else(|e| panic!("Failed to bind server on {}: {}", addr, e));
+    println!("Server is listening on {}", addr);
 
-    tokio::spawn({
-        let grant_tx = grant_tx.clone();
-        let revoke_tx = revoke_tx.clone();
-        async move {
-            loop {
-                match listener.accept().await {
-                    Ok((stream, peer)) => {
-                        println!("🔗 Accepted connection from {}", peer);
-                        let mut grant_rx = grant_tx.subscribe();
-                        let mut revoke_rx = revoke_tx.subscribe();
-                        let mut ws = match accept_async(stream).await {
-                            Ok(ws) => ws,
-                            Err(e) => {
-                                println!("⚠️ WebSocket accept error: {}", e);
-                                continue;
-                            }
-                        };
+    let grant_tx_clone = grant_tx.clone();
+    let revoke_tx_clone = revoke_tx.clone();
+    tokio::spawn(async move {
+        loop {
+            match listener.accept().await {
+                Ok((stream, peer)) => {
+                    println!("New connection from {}", peer);
 
-                        tokio::spawn(async move {
-                            loop {
-                                tokio::select! {
-                                    Ok(grant) = grant_rx.recv() => {
-                                        let mut msg = serde_json::to_value(&grant).unwrap();
-                                        if let Value::Object(ref mut map) = msg {
-                                            map.insert("type".into(), Value::String("Grant".into()));
-                                        }
-                                        let txt = msg.to_string();
-                                        println!("📤 Sending Grant: {}", txt);
-                                        let _ = ws.send(Message::Text(txt.into())).await;
+                    let mut grant_rx = grant_tx_clone.subscribe();
+                    let mut revoke_rx = revoke_tx_clone.subscribe();
+                    let ws = match accept_async(stream).await {
+                        Ok(ws) => ws,
+                        Err(e) => {
+                            eprintln!("Failed to accept WebSocket: {}", e);
+                            continue;
+                        }
+                    };
+
+                    tokio::spawn(async move {
+                        let mut ws = ws;
+                        loop {
+                            tokio::select! {
+                                Ok(grant) = grant_rx.recv() => {
+                                    let mut msg = serde_json::to_value(&grant).unwrap();
+                                    if let Value::Object(ref mut map) = msg {
+                                        map.insert("type".into(), Value::String("Grant".into()));
                                     }
-                                    Ok(revoke) = revoke_rx.recv() => {
-                                        let mut msg = serde_json::to_value(&revoke).unwrap();
-                                        if let Value::Object(ref mut map) = msg {
-                                            map.insert("type".into(), Value::String("Revoke".into()));
-                                        }
-                                        let txt = msg.to_string();
-                                        println!("📤 Sending Revoke: {}", txt);
-                                        let _ = ws.send(Message::Text(txt.into())).await;
+                                    let text = msg.to_string();
+                                    println!("Broadcasting grant: {}", text);
+                                    let _ = ws.send(Message::Text(text.into())).await;
+                                }
+                                Ok(revoke) = revoke_rx.recv() => {
+                                    let mut msg = serde_json::to_value(&revoke).unwrap();
+                                    if let Value::Object(ref mut map) = msg {
+                                        map.insert("type".into(), Value::String("Revoke".into()));
                                     }
-                                    msg = ws.next() => {
-                                        if msg.is_none() {
-                                            println!("⚠️ WebSocket closed by client");
-                                            break;
-                                        }
+                                    let text = msg.to_string();
+                                    println!("Broadcasting revoke: {}", text);
+                                    let _ = ws.send(Message::Text(text.into())).await;
+                                }
+                                msg = ws.next() => {
+                                    if msg.is_none() {
+                                        println!("Client disconnected");
+                                        break;
                                     }
                                 }
                             }
-                        });
-                    }
-                    Err(e) => {
-                        println!("⚠️ Accept error: {}", e);
-                    }
+                        }
+                    });
+                }
+                Err(e) => {
+                    eprintln!("Error accepting connection: {}", e);
                 }
             }
         }
@@ -110,86 +105,88 @@ pub async fn connect_client(
     remote_to_local: Arc<Mutex<HashMap<String, String>>>,
 ) {
     let url = format!("ws://{}", addr);
-    println!("▶️ Client dialing {}", url);
+    println!("Connecting to {}", url);
+
     let (mut ws, _) = match connect_async(&url).await {
         Ok(pair) => {
-            println!("✅ Client connected to {}", url);
+            println!("Connected to server at {}", url);
             pair
         }
         Err(e) => {
-            println!("❌ Client connect error: {}", e);
+            eprintln!("Failed to connect to {}: {}", url, e);
             return;
         }
     };
 
-    while let Some(Ok(Message::Text(txt))) = ws.next().await {
-        println!("📥 Client received: {}", txt);
-        let v: serde_json::Value = match serde_json::from_str(&txt) {
+    while let Some(Ok(Message::Text(text))) = ws.next().await {
+        println!("Received: {}", text);
+
+        let v: Value = match serde_json::from_str(&text) {
             Ok(v) => v,
             Err(e) => {
-                println!("⚠️ JSON parse error: {}", e);
+                eprintln!("Invalid JSON received: {}", e);
                 continue;
             }
         };
 
-        if let Some("Grant") = v.get("type").and_then(|t| t.as_str()) {
-            let grant: GrantMessage = match serde_json::from_value(v.clone()) {
-                Ok(g) => g,
-                Err(e) => {
-                    println!("⚠️ Grant parse error: {}", e);
-                    continue;
-                }
-            };
+        match v.get("type").and_then(|t| t.as_str()) {
+            Some("Grant") => {
+                let grant: GrantMessage = match serde_json::from_value(v.clone()) {
+                    Ok(g) => g,
+                    Err(e) => {
+                        eprintln!("Failed to parse grant message: {}", e);
+                        continue;
+                    }
+                };
+                let cookies = grant.cookies.clone();
+                let url = grant.url.clone();
+                let tab_id = grant.tab_id.clone();
+                let map = Arc::clone(&remote_to_local);
 
-            let remote_id = grant.tab_id.clone();
-            let cookies = grant.cookies.clone();
-            let url = grant.url.clone();
-            let map = remote_to_local.clone();
-            tokio::task::spawn_blocking(move || {
-                println!("🔄 spawn_blocking: import_and_open_with_cookies_from_memory");
-                if let Ok(local_id) =
-                    crate::chrome::import_and_open_with_cookies_from_memory(&cookies, &url)
-                {
-                    let mut guard = map.lock().unwrap();
-                    guard.insert(remote_id.clone(), local_id.clone());
-                }
-            });
-        }
+                tokio::task::spawn_blocking(move || {
+                    println!("Importing URL with cookies: {}", url);
+                    if let Ok(local_id) =
+                        crate::chrome::import_and_open_with_cookies_from_memory(&cookies, &url)
+                    {
+                        let mut guard = map.lock().unwrap();
+                        guard.insert(tab_id.clone(), local_id);
+                    }
+                });
+            }
+            Some("Revoke") => {
+                let revoke: RevokeMessage = match serde_json::from_value(v.clone()) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("Failed to parse revoke message: {}", e);
+                        continue;
+                    }
+                };
+                let tab_id = revoke.tab_id.clone();
+                let local_id = {
+                    let guard = remote_to_local.lock().unwrap();
+                    guard.get(&tab_id).cloned().unwrap_or(tab_id.clone())
+                };
+                let cookies = revoke.cookies.clone();
 
-        if let Some("Revoke") = v.get("type").and_then(|t| t.as_str()) {
-            // parse the incoming message
-            let revoke: RevokeMessage = match serde_json::from_value(v.clone()) {
-                Ok(r) => r,
-                Err(e) => {
-                    println!("⚠️ Revoke parse error: {}", e);
-                    continue;
-                }
-            };
-            let remote_id = revoke.tab_id.clone();
-            let local_id = remote_to_local
-                .lock()
-                .unwrap()
-                .get(&remote_id)
-                .cloned()
-                .unwrap_or(remote_id.clone());
+                tokio::task::spawn_blocking(move || {
+                    println!("Revoking cookies for tab {}", local_id);
+                    let cookie_tuples: Vec<(&str, &str, &str)> = cookies
+                        .iter()
+                        .map(|c| (c.name.as_str(), c.domain.as_str(), c.path.as_str()))
+                        .collect();
 
-            let cookies = revoke.cookies.clone();
-
-            tokio::task::spawn_blocking(move || {
-                println!("🔄 spawn_blocking: revoke_cookies");
-
-                let tuples: Vec<(&str, &str, &str)> = cookies
-                    .iter()
-                    .map(|c| (c.name.as_str(), c.domain.as_str(), c.path.as_str()))
-                    .collect();
-
-                match crate::chrome::revoke_cookies(&local_id, &tuples) {
-                    Ok(_) => println!("✅ revoke_cookies succeeded"),
-                    Err(e) => println!("❌ revoke error: {}", e),
-                }
-            });
+                    if let Err(e) = crate::chrome::revoke_cookies(&local_id, &cookie_tuples) {
+                        eprintln!("Error revoking cookies: {}", e);
+                    } else {
+                        println!("Cookies revoked successfully");
+                    }
+                });
+            }
+            _ => {
+                eprintln!("Unknown message type: {:?}", v.get("type"));
+            }
         }
     }
 
-    println!("⚠️ Client websocket loop ended");
+    println!("WebSocket listener loop has ended");
 }

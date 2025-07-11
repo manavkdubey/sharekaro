@@ -290,13 +290,9 @@ pub fn import_and_open_with_cookies_from_memory(
     } else {
         format!("https://{}", url)
     };
-    println!("Navigating to URL: {}", to_open);
     let cdp_url = format!("http://localhost:9222/json/new?{}", to_open);
-    println!("HTTP PUT {}", cdp_url);
     let resp = reqwest::blocking::Client::new().put(&cdp_url).send()?;
-    println!("HTTP PUT status: {}", resp.status());
     let body = resp.text()?;
-    println!("CDP response body: {}", body);
     let new_tab: serde_json::Value = serde_json::from_str(&body)?;
     let local_tab_id = new_tab["id"]
         .as_str()
@@ -306,12 +302,9 @@ pub fn import_and_open_with_cookies_from_memory(
     let ws_url = new_tab["webSocketDebuggerUrl"]
         .as_str()
         .ok_or("missing webSocketDebuggerUrl")?;
-    println!("WebSocket URL: {}", ws_url);
 
-    println!("Connecting WebSocket to {}", ws_url);
     let (mut socket, _) = connect(ws_url)?;
     let enable = json!({ "id": 1, "method": "Network.enable" });
-    println!("Sending Network.enable");
     socket.write_message(Message::Text(enable.to_string().into()))?;
 
     for (i, cookie) in cookies.iter().enumerate() {
@@ -338,7 +331,6 @@ pub fn import_and_open_with_cookies_from_memory(
             "method": "Network.setCookie",
             "params": params,
         });
-        println!("Setting cookie {}: {}", cookie.name, msg);
         socket.write_message(Message::Text(msg.to_string().into()))?;
     }
 
@@ -347,10 +339,8 @@ pub fn import_and_open_with_cookies_from_memory(
         "method": "Page.navigate",
         "params": { "url": to_open }
     });
-    println!("Sending navigate: {}", nav);
     socket.write_message(Message::Text(nav.to_string().into()))?;
 
-    println!("import_and_open_with_cookies_from_memory complete");
     Ok(local_tab_id)
 }
 
@@ -408,13 +398,10 @@ mod tests {
 
         match try_array {
             Ok(cookies) => {
-                println!(
-                    "✅ Parsed as Vec<Cookie>. First entry:\n{:#?}",
-                    cookies.get(0)
-                );
+                println!("Parsed as Vec<Cookie>. First entry:\n{:#?}", cookies.get(0));
             }
             Err(e) => {
-                println!("❌ Failed to parse as Vec<Cookie>: {e}");
+                println!(" Failed to parse as Vec<Cookie>: {e}");
 
                 let as_value: serde_json::Value = serde_json::from_str(&data).unwrap();
                 if let Some(arr) = as_value.get("cookies") {
