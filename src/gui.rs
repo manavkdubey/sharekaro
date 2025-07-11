@@ -130,24 +130,21 @@ impl App for ChromeTabApp {
                     "Listen"
                 };
                 if ui
-                    .add_enabled(!self.listening, egui::Button::new(button_label))
+                    .add_enabled(!self.listening, egui::Button::new("Listen"))
                     .clicked()
                 {
-                    // parse the address
-                    match self.listen_addr.parse::<SocketAddr>() {
-                        Ok(addr) => {
-                            // spawn a thread that runs the client
-                            std::thread::spawn(move || {
-                                let rt = tokio::runtime::Runtime::new().unwrap();
-                                rt.block_on(crate::network::connect_client(addr));
-                            });
-                            self.listening = true;
-                        }
-                        Err(e) => {
-                            // you could flash an error in the UI; for now just print
-                            eprintln!("Invalid listen address {}: {:?}", self.listen_addr, e);
-                        }
-                    }
+                    let addr = match self.listen_addr.parse::<SocketAddr>() {
+                        Ok(a) => a,
+                        Err(_) => return,
+                    };
+                    std::thread::spawn(move || {
+                        let rt = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .unwrap();
+                        rt.block_on(crate::network::connect_client(addr));
+                    });
+                    self.listening = true;
                 }
             });
             ui.separator();
