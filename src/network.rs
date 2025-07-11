@@ -118,54 +118,67 @@ pub async fn connect_client(addr: SocketAddr) {
         }
     };
 
-    while let Some(msg) = ws.next().await {
-        match msg {
-            Ok(Message::Text(txt)) => {
-                println!("📥 Client received: {}", txt);
-                let v: Value = match serde_json::from_str(&txt) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        println!("⚠️ JSON parse error: {}", e);
-                        continue;
-                    }
-                };
-                match v.get("type").and_then(|t| t.as_str()) {
-                    Some("Grant") => {
-                        if let Ok(grant) = serde_json::from_value::<GrantMessage>(v.clone()) {
-                            println!("🔄 Handling Grant for URL {}", grant.url);
-                            if let Err(e) = crate::chrome::import_and_open_with_cookies_from_memory(
-                                &grant.cookies,
-                                &grant.url,
-                            ) {
-                                println!("⚠️ import error: {}", e);
-                            }
-                        }
-                    }
-                    Some("Revoke") => {
-                        if let Ok(revoke) = serde_json::from_value::<RevokeMessage>(v.clone()) {
-                            println!("🔄 Handling Revoke for tab {}", revoke.tab_id);
-                            let tuples: Vec<(&str, &str, &str)> = revoke
-                                .cookies
-                                .iter()
-                                .map(|c| (c.name.as_str(), c.domain.as_str(), c.path.as_str()))
-                                .collect();
-                            if let Err(e) = crate::chrome::revoke_cookies(&revoke.tab_id, &tuples) {
-                                println!("⚠️ revoke error: {}", e);
-                            }
-                        }
-                    }
-                    other => {
-                        println!("⚠️ Unknown message type: {:?}", other);
-                    }
-                }
-            }
-            Ok(other) => {
-                println!("⚠️ Non-text WebSocket message: {:?}", other);
-            }
+    while let Some(Ok(Message::Text(txt))) = ws.next().await {
+        println!("📥 Client received: {}", txt);
+        let v: serde_json::Value = match serde_json::from_str(&txt) {
+            Ok(v) => v,
             Err(e) => {
-                println!("❌ WebSocket error: {}", e);
-                break;
+                println!("⚠️ JSON parse error: {}", e);
+                continue;
             }
+        };
+
+        if let Some("Grant") = v.get("type").and_then(|t| t.as_str()) {
+            let grant: GrantMessage = match serde_json::from_value(v.clone()) {
+                Ok(g) => g,
+                Err(e) => {
+                    println!("⚠️ Grant parse error: {}", e);
+                    continue;
+                }
+            };
+
+            // offload the entire blocking import call to a blocking thread
+            let cookies = grant.cookies.clone();
+            let url = grant.url.clone();
+            tokio::task::spawn_blocking(move || {
+                println!("🔄 spawn_blocking: import_and_open_with_cookies_from_memory");
+                if let Err(e) =
+                    crate::chrome::import_and_open_with_cookies_from_memory(&cookies, &url)
+                {
+                    println!("❌ import error: {}", e);
+                } else {
+                    println!("✅ import_and_open_with_cookies_from_memory succeeded");
+                }
+            });
+        }
+
+        if let Some("Revoke") = v.get("type").and_then(|t| t.as_str()) {
+            // parse the incoming message
+            let revoke: RevokeMessage = match serde_json::from_value(v.clone()) {
+                Ok(r) => r,
+                Err(e) => {
+                    println!("⚠️ Revoke parse error: {}", e);
+                    continue;
+                }
+            };
+
+            // clone out just what we need so the closure owns it all
+            let tab_id = revoke.tab_id.clone();
+            let cookies = revoke.cookies.clone();
+
+            tokio::task::spawn_blocking(move || {
+                println!("🔄 spawn_blocking: revoke_cookies");
+
+                let tuples: Vec<(&str, &str, &str)> = cookies
+                    .iter()
+                    .map(|c| (c.name.as_str(), c.domain.as_str(), c.path.as_str()))
+                    .collect();
+
+                match crate::chrome::revoke_cookies(&tab_id, &tuples) {
+                    Ok(_) => println!("✅ revoke_cookies succeeded"),
+                    Err(e) => println!("❌ revoke error: {}", e),
+                }
+            });
         }
     }
 
