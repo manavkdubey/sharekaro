@@ -38,7 +38,7 @@ impl Default for ChromeTabApp {
         });
         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
         let (grant_tx, revoke_tx) = rt.block_on(crate::network::spawn_server(
-            "127.0.0.1:9001".parse().unwrap(),
+            "0.0.0.0:9234".parse().unwrap(),
         ));
 
         Self {
