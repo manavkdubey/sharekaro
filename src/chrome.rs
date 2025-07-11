@@ -285,27 +285,30 @@ pub fn import_and_open_with_cookies_from_memory(
     cookies: &[Cookie],
     url: &str,
 ) -> Result<(), Box<dyn Error>> {
-    // 1) Normalize & open a new tab via CDP
     let to_open = if url.starts_with("http://") || url.starts_with("https://") {
         url.to_string()
     } else {
         format!("https://{}", url)
     };
-    let resp = reqwest::blocking::Client::new()
-        .put(&format!("http://localhost:9222/json/new?{}", to_open))
-        .send()?;
+    println!("Navigating to URL: {}", to_open);
+    let cdp_url = format!("http://localhost:9222/json/new?{}", to_open);
+    println!("HTTP PUT {}", cdp_url);
+    let resp = reqwest::blocking::Client::new().put(&cdp_url).send()?;
+    println!("HTTP PUT status: {}", resp.status());
     let body = resp.text()?;
+    println!("CDP response body: {}", body);
     let new_tab: serde_json::Value = serde_json::from_str(&body)?;
     let ws_url = new_tab["webSocketDebuggerUrl"]
         .as_str()
         .ok_or("missing webSocketDebuggerUrl")?;
+    println!("WebSocket URL: {}", ws_url);
 
-    // 2) Connect and enable the Network domain
+    println!("Connecting WebSocket to {}", ws_url);
     let (mut socket, _) = connect(ws_url)?;
     let enable = json!({ "id": 1, "method": "Network.enable" });
+    println!("Sending Network.enable");
     socket.write_message(Message::Text(enable.to_string().into()))?;
 
-    // 3) Send one `Network.setCookie` command per cookie
     for (i, cookie) in cookies.iter().enumerate() {
         let mut params = serde_json::Map::new();
         params.insert("name".into(), json!(cookie.name));
@@ -330,16 +333,19 @@ pub fn import_and_open_with_cookies_from_memory(
             "method": "Network.setCookie",
             "params": params,
         });
+        println!("Setting cookie {}: {}", cookie.name, msg);
         socket.write_message(Message::Text(msg.to_string().into()))?;
     }
 
-    // 4) Finally navigate (just in case)
     let nav = json!({
         "id": 10000,
         "method": "Page.navigate",
         "params": { "url": to_open }
     });
+    println!("Sending navigate: {}", nav);
     socket.write_message(Message::Text(nav.to_string().into()))?;
+
+    println!("import_and_open_with_cookies_from_memory complete");
     Ok(())
 }
 
