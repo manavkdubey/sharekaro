@@ -69,7 +69,7 @@ impl ChromeTabApp {
                 thread::sleep(Duration::from_secs(1));
             }
         });
-        let listen_addr = "0.0.0.0:9234".to_string();
+        let listen_addr = "192.168.1.4:9234".to_string();
         let listening = false;
         let mut style = (*cc.egui_ctx.style()).clone();
         style.visuals.dark_mode = true;
