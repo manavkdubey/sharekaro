@@ -22,7 +22,7 @@ fn main() -> Result<(), eframe::Error> {
     let (_child, _temp_profile) = launch_chrome_with_cdp(args.profile);
     // spawn your network server
     let (grant_tx, revoke_tx) = rt.block_on(sharekaro::network::spawn_server(
-        "127.0.0.1:9234".parse().unwrap(),
+        "0.0.0.0:9234".parse().unwrap(),
     ));
     let app_factory =
         move |cc: &CreationContext<'_>| -> Result<Box<dyn App>, Box<dyn Error + Send + Sync>> {
