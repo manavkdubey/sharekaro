@@ -22,6 +22,8 @@ pub struct ChromeTabApp {
     cookie_import: CookieImportState,
     grant_tx: BroadcastSender<GrantMessage>,
     revoke_tx: BroadcastSender<RevokeMessage>,
+    listen_addr: String,
+    listening: bool,
 }
 
 // impl Default for ChromeTabApp {
@@ -66,6 +68,8 @@ impl ChromeTabApp {
                 thread::sleep(Duration::from_secs(1));
             }
         });
+        let listen_addr = "0.0.0.0:9234".to_string();
+        let listening = false;
         let mut style = (*cc.egui_ctx.style()).clone();
         style.visuals.dark_mode = true;
         cc.egui_ctx.set_style(style);
@@ -74,6 +78,8 @@ impl ChromeTabApp {
             cookie_import: CookieImportState::default(),
             grant_tx,
             revoke_tx,
+            listening,
+            listen_addr,
         }
     }
 }
@@ -114,6 +120,36 @@ impl App for ChromeTabApp {
             });
 
         CentralPanel::default().show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Peer to listen on:");
+                ui.text_edit_singleline(&mut self.listen_addr);
+                let button_label = if self.listening {
+                    "Listening…"
+                } else {
+                    "Listen"
+                };
+                if ui
+                    .add_enabled(!self.listening, egui::Button::new(button_label))
+                    .clicked()
+                {
+                    // parse the address
+                    match self.listen_addr.parse::<SocketAddr>() {
+                        Ok(addr) => {
+                            // spawn a thread that runs the client
+                            std::thread::spawn(move || {
+                                let rt = tokio::runtime::Runtime::new().unwrap();
+                                rt.block_on(crate::network::connect_client(addr));
+                            });
+                            self.listening = true;
+                        }
+                        Err(e) => {
+                            // you could flash an error in the UI; for now just print
+                            eprintln!("Invalid listen address {}: {:?}", self.listen_addr, e);
+                        }
+                    }
+                }
+            });
+            ui.separator();
             let tabs = self.tabs.lock().unwrap();
 
             if tabs.is_empty() {
