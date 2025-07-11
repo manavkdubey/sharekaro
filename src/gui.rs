@@ -9,6 +9,7 @@ use egui::{
     Rounding, ScrollArea, Sense, TopBottomPanel, Vec2,
 };
 use rfd::FileDialog;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::{
     sync::{Arc, Mutex},
