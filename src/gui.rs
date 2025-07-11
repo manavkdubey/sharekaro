@@ -128,19 +128,25 @@ impl App for ChromeTabApp {
             ui.horizontal(|ui| {
                 ui.label("Peer to listen on:");
                 ui.text_edit_singleline(&mut self.listen_addr);
-                let button_label = if self.listening {
+                let label = if self.listening {
                     "Listening…"
                 } else {
                     "Listen"
                 };
                 if ui
-                    .add_enabled(!self.listening, Button::new(button_label))
+                    .add_enabled(!self.listening, egui::Button::new(label))
                     .clicked()
                 {
                     if let Ok(addr) = self.listen_addr.parse::<SocketAddr>() {
-                        let handle = self.rt_handle.clone();
-                        handle.spawn(async move {
-                            crate::network::connect_client(addr).await;
+                        // spawn a _new_ OS thread and build a runtime there
+                        thread::spawn(move || {
+                            let rt = tokio::runtime::Builder::new_current_thread()
+                                .enable_all()
+                                .build()
+                                .expect("failed to build runtime");
+                            rt.block_on(async move {
+                                crate::network::connect_client(addr).await;
+                            });
                         });
                         self.listening = true;
                     }
